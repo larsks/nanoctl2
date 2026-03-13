@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -57,7 +58,7 @@ func main() {
 	groupBtnOn := make([][]int, 8)
 	groupBtnLED := make([][]string, 8)
 
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		n := i + 1
 		groupBtnAssign[i] = make([]string, 3)
 		groupBtnBehavior[i] = make([]string, 3)
@@ -273,11 +274,9 @@ func collectSceneFlags(fs *pflag.FlagSet) map[string]bool {
 		if strings.HasSuffix(name, "-led") {
 			return // LED flags handled separately
 		}
-		for _, prefix := range sceneParamPrefixes {
-			if name == prefix {
-				changed[name] = true
-				return
-			}
+		if slices.Contains(sceneParamPrefixes, name) {
+			changed[name] = true
+			return
 		}
 		for _, sub := range sceneParamContains {
 			if strings.Contains(name, sub) {
@@ -384,7 +383,7 @@ func applySceneFlags(
 		s.LEDMode = parseLEDMode(*ledMode)
 	}
 
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		n := i + 1
 		g := &s.Groups[i]
 
@@ -464,7 +463,7 @@ func applySceneFlags(
 func sendLEDs(conn *midiConn, s *Scene, fs *pflag.FlagSet,
 	groupBtnLED [][]string, transportBtnLED []string,
 ) error {
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		n := i + 1
 		g := s.Groups[i]
 		btns := []ButtonConfig{g.Solo, g.Mute, g.Rec}

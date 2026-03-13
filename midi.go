@@ -435,7 +435,7 @@ func listPorts(portName string) {
 	n := int(C.alsa_list_ports(ac, &buf[0], C.int(maxPorts)))
 
 	fmt.Printf("MIDI ports (searching for %q):\n", portName)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		name := C.GoString(&buf[i][0])
 		marker := ""
 		if strings.Contains(name, portName) {

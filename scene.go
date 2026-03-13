@@ -48,10 +48,7 @@ const sceneDataSize = 339
 func decode7bit(data []byte) []byte {
 	var result []byte
 	for i := 0; i < len(data); {
-		chunk := 8
-		if len(data)-i < 8 {
-			chunk = len(data) - i
-		}
+		chunk := min(8, len(data)-i)
 		msb := data[i]
 		for j := 0; j < chunk-1; j++ {
 			result = append(result, data[i+1+j]|((msb>>j)&1)<<7)
@@ -66,10 +63,7 @@ func decode7bit(data []byte) []byte {
 func encode7bit(data []byte) []byte {
 	var result []byte
 	for i := 0; i < len(data); {
-		chunk := 7
-		if len(data)-i < 7 {
-			chunk = len(data) - i
-		}
+		chunk := min(7, len(data)-i)
 		group := data[i : i+chunk]
 		msb := byte(0)
 		for j, b := range group {
@@ -171,10 +165,10 @@ func decodeScene(data []byte) (*Scene, error) {
 		LEDMode:      int(data[2]),
 		TransportCh:  int(data[251]),
 	}
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		s.Groups[i] = readGroup(data, 3+i*31)
 	}
-	for i := 0; i < 11; i++ {
+	for i := range 11 {
 		s.Transport[i] = readButton(data, 252+i*6)
 	}
 	return s, nil
@@ -188,11 +182,11 @@ func applySceneToBytes(original []byte, s *Scene) []byte {
 	data[0] = byte(s.GlobalMidiCh)
 	data[1] = byte(s.ControlMode)
 	data[2] = byte(s.LEDMode)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		writeGroup(data, 3+i*31, s.Groups[i])
 	}
 	data[251] = byte(s.TransportCh)
-	for i := 0; i < 11; i++ {
+	for i := range 11 {
 		writeButton(data, 252+i*6, s.Transport[i])
 	}
 	return data
