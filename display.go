@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+)
 
 var (
 	controlModeNames = []string{"CC", "Cubase", "DP", "Live", "ProTools", "SONAR"}
@@ -41,37 +44,37 @@ func fmtButton(b ButtonConfig) string {
 	return fmt.Sprintf("%s, %s, %s=%d, off=%d, on=%d", assign, behavior, label, b.CC, b.OffVal, b.OnVal)
 }
 
-// displayScene prints the full scene configuration to stdout.
-func displayScene(s *Scene) {
-	fmt.Println("=== nanoKONTROL2 Scene Configuration ===")
-	fmt.Printf("Global: MIDI ch=%d, mode=%s, LED=%s\n",
+// displayScene prints the full scene configuration to w.
+func displayScene(w io.Writer, s *Scene) {
+	fmt.Fprintln(w, "=== nanoKONTROL2 Scene Configuration ===")
+	fmt.Fprintf(w, "Global: MIDI ch=%d, mode=%s, LED=%s\n",
 		s.GlobalMidiCh+1,
 		fmtMode(s.ControlMode, controlModeNames),
 		fmtMode(s.LEDMode, ledModeNames),
 	)
 
 	for i, g := range s.Groups {
-		fmt.Printf("\nGroup %d (ch=%s):\n", i+1, fmtCh(g.MidiCh))
+		fmt.Fprintf(w, "\nGroup %d (ch=%s):\n", i+1, fmtCh(g.MidiCh))
 
 		if g.SliderEnabled {
-			fmt.Printf("  Slider: CC=%d, range=%d-%d\n", g.SliderCC, g.SliderMin, g.SliderMax)
+			fmt.Fprintf(w, "  Slider: CC=%d, range=%d-%d\n", g.SliderCC, g.SliderMin, g.SliderMax)
 		} else {
-			fmt.Println("  Slider: Disabled")
+			fmt.Fprintln(w, "  Slider: Disabled")
 		}
 
 		if g.KnobEnabled {
-			fmt.Printf("  Knob:   CC=%d, range=%d-%d\n", g.KnobCC, g.KnobMin, g.KnobMax)
+			fmt.Fprintf(w, "  Knob:   CC=%d, range=%d-%d\n", g.KnobCC, g.KnobMin, g.KnobMax)
 		} else {
-			fmt.Println("  Knob:   Disabled")
+			fmt.Fprintln(w, "  Knob:   Disabled")
 		}
 
-		fmt.Printf("  Solo:   %s\n", fmtButton(g.Solo))
-		fmt.Printf("  Mute:   %s\n", fmtButton(g.Mute))
-		fmt.Printf("  Rec:    %s\n", fmtButton(g.Rec))
+		fmt.Fprintf(w, "  Solo:   %s\n", fmtButton(g.Solo))
+		fmt.Fprintf(w, "  Mute:   %s\n", fmtButton(g.Mute))
+		fmt.Fprintf(w, "  Rec:    %s\n", fmtButton(g.Rec))
 	}
 
-	fmt.Printf("\nTransport (ch=%s):\n", fmtCh(s.TransportCh))
+	fmt.Fprintf(w, "\nTransport (ch=%s):\n", fmtCh(s.TransportCh))
 	for i, name := range transportNames {
-		fmt.Printf("  %-14s %s\n", name+":", fmtButton(s.Transport[i]))
+		fmt.Fprintf(w, "  %-14s %s\n", name+":", fmtButton(s.Transport[i]))
 	}
 }

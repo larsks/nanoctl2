@@ -30,6 +30,9 @@ func main() {
 	portFlag := fs.String("port", "nanoKONTROL2", "MIDI port name (substring match)")
 	listPortsFlag := fs.Bool("list-ports", false, "list available MIDI ports and exit")
 	showFlag := fs.Bool("show", false, "display the current configuration")
+	jsonFlag := fs.BoolP("json", "j", false, "output scene as JSON (use with --show)")
+	outputFlag := fs.StringP("output", "o", "", "write output to a file instead of stdout")
+	configFlag := fs.StringP("config-file", "f", "", "read JSON config file and apply to device")
 	globalMidiCh := fs.Int("global-midi-ch", 1, "Global MIDI channel (1-16)")
 	controlMode := fs.String("control-mode", "cc", "Control mode: cc|cubase|dp|live|protools|sonar")
 	ledMode := fs.String("led-mode", "internal", "LED mode: internal|external")
@@ -119,7 +122,7 @@ func main() {
 	sceneFlags := collectSceneFlags(fs)
 	ledFlags := collectLEDFlags(fs)
 
-	if len(sceneFlags) == 0 && len(ledFlags) == 0 && !*showFlag {
+	if len(sceneFlags) == 0 && len(ledFlags) == 0 && !*showFlag && !fs.Changed("config-file") {
 		fmt.Fprintln(os.Stderr, "error: nothing to do — specify at least one flag or --show")
 		os.Exit(2)
 	}
@@ -134,6 +137,32 @@ func main() {
 
 	var rawScene []byte
 	var scene *Scene
+
+	// Apply config file if specified.
+	if fs.Changed("config-file") {
+		if len(sceneFlags) > 0 {
+			fmt.Fprintln(os.Stderr, "error: --config-file cannot be combined with individual scene flags")
+			os.Exit(1)
+		}
+		newScene, err := loadSceneFromFile(*configFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if rawScene == nil {
+			rawScene, _, err = queryScene(conn)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error querying scene: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		rawScene = applySceneToBytes(rawScene, newScene)
+		if err := writeScene(conn, rawScene); err != nil {
+			fmt.Fprintf(os.Stderr, "error writing scene: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Scene written successfully.")
+	}
 
 	// Apply scene parameter changes if any were set.
 	if len(sceneFlags) > 0 {
@@ -187,8 +216,38 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error querying scene: %v\n", err)
 			os.Exit(1)
 		}
-		displayScene(scene)
+
+		out, closeOut, err := openOutput(*outputFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		defer closeOut()
+
+		if *jsonFlag {
+			data, err := marshalSceneJSON(scene)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error marshalling JSON: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Fprintln(out, string(data))
+		} else {
+			displayScene(out, scene)
+		}
 	}
+}
+
+// openOutput returns an io.Writer for path (or stdout if path is empty),
+// along with a close function to call when done.
+func openOutput(path string) (io.Writer, func(), error) {
+	if path == "" {
+		return os.Stdout, func() {}, nil
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opening output file: %w", err)
+	}
+	return f, func() { f.Close() }, nil
 }
 
 // collectSceneFlags returns the set of flag names that were changed and affect scene data.
