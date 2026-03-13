@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -23,6 +24,7 @@ var groupButtonNames = []string{"solo", "mute", "rec"}
 
 func main() {
 	fs := pflag.NewFlagSet("nanoctl", pflag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 
 	// --- Global flags ---
 	portFlag := fs.String("port", "nanoKONTROL2", "MIDI port name (substring match)")
@@ -101,6 +103,7 @@ func main() {
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		if err == pflag.ErrHelp {
+			fmt.Printf("Usage of nanoctl:\n%s", fs.FlagUsages())
 			os.Exit(0)
 		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
