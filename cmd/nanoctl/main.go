@@ -22,8 +22,19 @@ var transportButtonNames = []string{
 	"rew", "ff", "stop", "play", "rec",
 }
 
+// transportAliases maps alias button name → canonical button name.
+var transportAliases = []struct{ alias, canonical string }{
+	{"record", "rec"},
+	{"ffwd", "ff"},
+	{"fastforward", "ff"},
+	{"rewind", "rew"},
+}
+
 // groupButtonNames lists the per-strip button types.
 var groupButtonNames = []string{"solo", "mute", "rec"}
+
+// ccSender is a function that sends a single MIDI CC message.
+type ccSender func(ch, cc, val int) error
 
 func main() {
 	fs := pflag.NewFlagSet("nanoctl", pflag.ContinueOnError)
@@ -105,6 +116,29 @@ func main() {
 		fs.IntVar(&transportBtnOff[i], fmt.Sprintf("transport-%s-off", name), 0, "Off value (0-127)")
 		fs.IntVar(&transportBtnOn[i], fmt.Sprintf("transport-%s-on", name), 127, "On value (0-127)")
 		fs.StringVar(&transportBtnLED[i], fmt.Sprintf("transport-%s-led", name), "off", "LED state: on|off")
+	}
+
+	for _, a := range transportAliases {
+		canonIdx := slices.Index(transportButtonNames, a.canonical)
+		for _, suffix := range []string{"assign", "behavior", "cc", "off", "on", "led"} {
+			aliasName := fmt.Sprintf("transport-%s-%s", a.alias, suffix)
+			canonName := fmt.Sprintf("transport-%s-%s", a.canonical, suffix)
+			switch suffix {
+			case "assign":
+				fs.StringVar(&transportBtnAssign[canonIdx], aliasName, fs.Lookup(canonName).DefValue, "")
+			case "behavior":
+				fs.StringVar(&transportBtnBehavior[canonIdx], aliasName, fs.Lookup(canonName).DefValue, "")
+			case "cc":
+				fs.IntVar(&transportBtnCC[canonIdx], aliasName, 0, "")
+			case "off":
+				fs.IntVar(&transportBtnOff[canonIdx], aliasName, 0, "")
+			case "on":
+				fs.IntVar(&transportBtnOn[canonIdx], aliasName, 127, "")
+			case "led":
+				fs.StringVar(&transportBtnLED[canonIdx], aliasName, fs.Lookup(canonName).DefValue, "")
+			}
+			fs.MarkHidden(aliasName)
+		}
 	}
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -205,7 +239,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, "warning: LED mode is Internal — LEDs are controlled by the device, not the host")
 		}
 
-		if err := sendLEDs(conn, s, fs, groupBtnLED, transportBtnLED); err != nil {
+		if err := sendLEDs(func(ch, cc, val int) error { return midi.SendCC(conn, ch, cc, val) },
+			s, ledFlags, groupBtnLED, transportBtnLED); err != nil {
 			fmt.Fprintf(os.Stderr, "error sending LED messages: %v\n", err)
 			os.Exit(1)
 		}
@@ -271,7 +306,7 @@ func collectSceneFlags(fs *pflag.FlagSet) map[string]bool {
 		if !f.Changed {
 			return
 		}
-		name := f.Name
+		name := normalizeTransportFlagName(f.Name)
 		if strings.HasSuffix(name, "-led") {
 			return // LED flags handled separately
 		}
@@ -294,10 +329,22 @@ func collectLEDFlags(fs *pflag.FlagSet) map[string]bool {
 	changed := map[string]bool{}
 	fs.VisitAll(func(f *pflag.Flag) {
 		if f.Changed && strings.HasSuffix(f.Name, "-led") {
-			changed[f.Name] = true
+			changed[normalizeTransportFlagName(f.Name)] = true
 		}
 	})
 	return changed
+}
+
+// normalizeTransportFlagName maps alias transport flag names to their canonical equivalents.
+func normalizeTransportFlagName(name string) string {
+	for _, a := range transportAliases {
+		old := fmt.Sprintf("transport-%s-", a.alias)
+		new := fmt.Sprintf("transport-%s-", a.canonical)
+		if strings.HasPrefix(name, old) {
+			return strings.Replace(name, old, new, 1)
+		}
+	}
+	return name
 }
 
 func parseBoolFlag(val string) bool {
@@ -421,7 +468,7 @@ func applySceneFlags(
 }
 
 // sendLEDs sends CC messages for all changed LED flags.
-func sendLEDs(conn *midi.MidiConn, s *scene.Scene, fs *pflag.FlagSet,
+func sendLEDs(send ccSender, s *scene.Scene, ledFlags map[string]bool,
 	groupBtnLED [][]string, transportBtnLED []string,
 ) error {
 	for i := range 8 {
@@ -430,7 +477,7 @@ func sendLEDs(conn *midi.MidiConn, s *scene.Scene, fs *pflag.FlagSet,
 		btns := []scene.ButtonConfig{g.Solo, g.Mute, g.Rec}
 		for j, btn := range groupButtonNames {
 			flagName := fmt.Sprintf("group-%d-%s-led", n, btn)
-			if !fs.Changed(flagName) {
+			if !ledFlags[flagName] {
 				continue
 			}
 			ch := scene.EffectiveMidiCh(g.MidiCh, s.GlobalMidiCh)
@@ -439,7 +486,7 @@ func sendLEDs(conn *midi.MidiConn, s *scene.Scene, fs *pflag.FlagSet,
 			if strings.ToLower(groupBtnLED[i][j]) == "on" {
 				val = 127
 			}
-			if err := midi.SendCC(conn, ch, cc, val); err != nil {
+			if err := send(ch, cc, val); err != nil {
 				return fmt.Errorf("send LED CC for %s: %w", flagName, err)
 			}
 		}
@@ -447,7 +494,7 @@ func sendLEDs(conn *midi.MidiConn, s *scene.Scene, fs *pflag.FlagSet,
 
 	for i, name := range transportButtonNames {
 		flagName := fmt.Sprintf("transport-%s-led", name)
-		if !fs.Changed(flagName) {
+		if !ledFlags[flagName] {
 			continue
 		}
 		ch := scene.EffectiveMidiCh(s.TransportCh, s.GlobalMidiCh)
@@ -456,7 +503,7 @@ func sendLEDs(conn *midi.MidiConn, s *scene.Scene, fs *pflag.FlagSet,
 		if strings.ToLower(transportBtnLED[i]) == "on" {
 			val = 127
 		}
-		if err := midi.SendCC(conn, ch, cc, val); err != nil {
+		if err := send(ch, cc, val); err != nil {
 			return fmt.Errorf("send LED CC for %s: %w", flagName, err)
 		}
 	}
