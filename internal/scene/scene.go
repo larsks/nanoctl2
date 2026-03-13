@@ -1,6 +1,9 @@
-package main
+package scene
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ButtonConfig holds the configuration for a single button (Solo, Mute, Rec, or Transport).
 type ButtonConfig struct {
@@ -39,13 +42,21 @@ type Scene struct {
 	Transport [11]ButtonConfig
 }
 
+// Enum name slices for JSON/CLI use (lowercase, matching CLI flag values).
+var (
+	ControlModeNames = []string{"cc", "cubase", "dp", "live", "protools", "sonar"}
+	LEDModeNames     = []string{"internal", "external"}
+	AssignNames      = []string{"none", "cc", "note"}
+	BehaviorNames    = []string{"momentary", "toggle"}
+)
+
 // sceneDataSize is the number of decoded bytes in a scene dump (388 encoded → 339 decoded).
 const sceneDataSize = 339
 
-// decode7bit decodes KORG 7-bit MIDI encoding: groups of 8 MIDI bytes → 7 data bytes.
+// Decode7bit decodes KORG 7-bit MIDI encoding: groups of 8 MIDI bytes → 7 data bytes.
 // The first byte of each group holds the MSBs of the following 7 bytes.
 // Bit j of the MSB byte is the MSB of byte j+1 in the group.
-func decode7bit(data []byte) []byte {
+func Decode7bit(data []byte) []byte {
 	var result []byte
 	for i := 0; i < len(data); {
 		chunk := min(8, len(data)-i)
@@ -58,9 +69,9 @@ func decode7bit(data []byte) []byte {
 	return result
 }
 
-// encode7bit encodes data bytes into KORG 7-bit MIDI encoding.
+// Encode7bit encodes data bytes into KORG 7-bit MIDI encoding.
 // Groups of 7 data bytes → 8 MIDI bytes (each < 0x80).
-func encode7bit(data []byte) []byte {
+func Encode7bit(data []byte) []byte {
 	var result []byte
 	for i := 0; i < len(data); {
 		chunk := min(7, len(data)-i)
@@ -154,29 +165,30 @@ func writeGroup(data []byte, base int, grp Group) {
 	writeButton(data, base+25, grp.Rec)
 }
 
-// decodeScene parses a 339-byte decoded scene data buffer into a Scene struct.
-func decodeScene(data []byte) (*Scene, error) {
-	if len(data) < sceneDataSize {
-		return nil, fmt.Errorf("expected %d bytes of scene data, got %d", sceneDataSize, len(data))
+// DecodeScene parses a 339-byte decoded scene data buffer into a Scene struct.
+// Returns nil if buf is too short.
+func DecodeScene(buf []byte) *Scene {
+	if len(buf) < sceneDataSize {
+		return nil
 	}
 	s := &Scene{
-		GlobalMidiCh: int(data[0]),
-		ControlMode:  int(data[1]),
-		LEDMode:      int(data[2]),
-		TransportCh:  int(data[251]),
+		GlobalMidiCh: int(buf[0]),
+		ControlMode:  int(buf[1]),
+		LEDMode:      int(buf[2]),
+		TransportCh:  int(buf[251]),
 	}
 	for i := range 8 {
-		s.Groups[i] = readGroup(data, 3+i*31)
+		s.Groups[i] = readGroup(buf, 3+i*31)
 	}
 	for i := range 11 {
-		s.Transport[i] = readButton(data, 252+i*6)
+		s.Transport[i] = readButton(buf, 252+i*6)
 	}
-	return s, nil
+	return s
 }
 
-// applySceneToBytes writes a Scene struct's known fields back into a copy of the raw
+// ApplySceneToBytes writes a Scene struct's known fields back into a copy of the raw
 // 339-byte decoded buffer, preserving any unknown/reserved bytes from the original.
-func applySceneToBytes(original []byte, s *Scene) []byte {
+func ApplySceneToBytes(original []byte, s *Scene) []byte {
 	data := make([]byte, len(original))
 	copy(data, original)
 	data[0] = byte(s.GlobalMidiCh)
@@ -192,11 +204,50 @@ func applySceneToBytes(original []byte, s *Scene) []byte {
 	return data
 }
 
-// effectiveMidiCh returns the effective MIDI channel (0-15) for a button,
+// EffectiveMidiCh returns the effective MIDI channel (0-15) for a button,
 // resolving "global" (16) using the scene's global channel.
-func effectiveMidiCh(ch, globalCh int) int {
+func EffectiveMidiCh(ch, globalCh int) int {
 	if ch == 16 {
 		return globalCh
 	}
 	return ch
+}
+
+// ChToString converts an internal channel value (0-15 or 16=global) to a string.
+func ChToString(ch int) string {
+	if ch == 16 {
+		return "global"
+	}
+	return fmt.Sprintf("%d", ch+1)
+}
+
+// ChFromString parses a channel string ("1"-"16" or "global") to an internal value.
+func ChFromString(s string) (int, error) {
+	if strings.ToLower(s) == "global" {
+		return 16, nil
+	}
+	var n int
+	if _, err := fmt.Sscanf(s, "%d", &n); err != nil || n < 1 || n > 16 {
+		return 0, fmt.Errorf("invalid channel %q: must be 1-16 or \"global\"", s)
+	}
+	return n - 1, nil
+}
+
+// EnumToString returns the string name for an int enum index, or an error string.
+func EnumToString(idx int, names []string) string {
+	if idx >= 0 && idx < len(names) {
+		return names[idx]
+	}
+	return fmt.Sprintf("unknown(%d)", idx)
+}
+
+// EnumFromString returns the index for a string enum name, or an error.
+func EnumFromString(val string, names []string, field string) (int, error) {
+	v := strings.ToLower(val)
+	for i, name := range names {
+		if v == name {
+			return i, nil
+		}
+	}
+	return 0, fmt.Errorf("invalid %s %q: must be one of %v", field, val, names)
 }

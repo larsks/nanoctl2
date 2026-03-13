@@ -1,8 +1,10 @@
-package main
+package display
 
 import (
 	"fmt"
 	"io"
+
+	"nanoctl/internal/scene"
 )
 
 var (
@@ -31,7 +33,7 @@ func fmtMode(idx int, names []string) string {
 	return fmt.Sprintf("unknown(%d)", idx)
 }
 
-func fmtButton(b ButtonConfig) string {
+func fmtButton(b scene.ButtonConfig) string {
 	if b.Assign == 0 {
 		return "No Assign"
 	}
@@ -44,8 +46,8 @@ func fmtButton(b ButtonConfig) string {
 	return fmt.Sprintf("%s, %s, %s=%d, off=%d, on=%d", assign, behavior, label, b.CC, b.OffVal, b.OnVal)
 }
 
-// displayScene prints the full scene configuration to w.
-func displayScene(w io.Writer, s *Scene) {
+// DisplayScene prints the full scene configuration to w.
+func DisplayScene(w io.Writer, s *scene.Scene) {
 	fmt.Fprintln(w, "=== nanoKONTROL2 Scene Configuration ===")
 	fmt.Fprintf(w, "Global: MIDI ch=%d, mode=%s, LED=%s\n",
 		s.GlobalMidiCh+1,

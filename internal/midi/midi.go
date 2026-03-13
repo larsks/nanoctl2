@@ -1,4 +1,4 @@
-package main
+package midi
 
 /*
 #cgo LDFLAGS: -lasound
@@ -222,6 +222,8 @@ import (
 	"strings"
 	"time"
 	"unsafe"
+
+	"nanoctl/internal/scene"
 )
 
 // SysEx payloads — without F0/F7.
@@ -238,13 +240,13 @@ var (
 	funcWriteError    = []byte{0x5F, 0x22, 0x00}
 )
 
-// midiConn wraps an ALSA sequencer connection to the nanoKONTROL2.
-type midiConn struct {
+// MidiConn wraps an ALSA sequencer connection to the nanoKONTROL2.
+type MidiConn struct {
 	c *C.alsaConn
 }
 
-// openPorts opens the ALSA sequencer and connects to the port matching portName.
-func openPorts(portName string) (conn *midiConn, cleanup func(), err error) {
+// OpenPorts opens the ALSA sequencer and connects to the port matching portName.
+func OpenPorts(portName string) (conn *MidiConn, cleanup func(), err error) {
 	cname := C.CString("nanoctl")
 	defer C.free(unsafe.Pointer(cname))
 
@@ -261,13 +263,13 @@ func openPorts(portName string) (conn *midiConn, cleanup func(), err error) {
 		return nil, nil, fmt.Errorf("no MIDI port matching %q — use --list-ports to see available ports", portName)
 	}
 
-	conn = &midiConn{c: ac}
+	conn = &MidiConn{c: ac}
 	cleanup = func() { C.alsa_close(ac) }
 	return conn, cleanup, nil
 }
 
 // sendSysex sends a SysEx payload (without F0/F7) to the device.
-func (m *midiConn) sendSysex(data []byte) error {
+func (m *MidiConn) sendSysex(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -279,7 +281,7 @@ func (m *midiConn) sendSysex(data []byte) error {
 }
 
 // sendCC sends a MIDI CC message.
-func (m *midiConn) sendCC(channel, controller, value int) error {
+func (m *MidiConn) sendCC(channel, controller, value int) error {
 	ret := C.alsa_send_cc(m.c, C.int(channel), C.int(controller), C.int(value))
 	if ret < 0 {
 		return fmt.Errorf("ALSA send CC error: %d", int(ret))
@@ -287,9 +289,14 @@ func (m *midiConn) sendCC(channel, controller, value int) error {
 	return nil
 }
 
+// SendCC sends a MIDI CC message via conn.
+func SendCC(conn *MidiConn, ch, cc, val int) error {
+	return conn.sendCC(ch, cc, val)
+}
+
 // recvSysex waits up to the given duration for a SysEx event.
 // Returns the payload without F0/F7.
-func (m *midiConn) recvSysex(timeout time.Duration) ([]byte, error) {
+func (m *MidiConn) recvSysex(timeout time.Duration) ([]byte, error) {
 	ms := C.int(timeout.Milliseconds())
 	var cdata *C.uchar
 	var clen C.int
@@ -304,7 +311,7 @@ func (m *midiConn) recvSysex(timeout time.Duration) ([]byte, error) {
 }
 
 // waitForSysEx sends a message via ready(), then waits for a matching SysEx response.
-func (m *midiConn) waitForSysEx(ready func() error, match func([]byte) bool, timeout time.Duration) ([]byte, error) {
+func (m *MidiConn) waitForSysEx(ready func() error, match func([]byte) bool, timeout time.Duration) ([]byte, error) {
 	if err := ready(); err != nil {
 		return nil, err
 	}
@@ -339,9 +346,9 @@ func responseFunc(data []byte) []byte {
 	return data[6:]
 }
 
-// queryScene sends a scene-dump request and returns the 339-byte decoded scene data
+// QueryScene sends a scene-dump request and returns the 339-byte decoded scene data
 // together with the parsed Scene struct.
-func queryScene(m *midiConn) ([]byte, *Scene, error) {
+func QueryScene(m *MidiConn) ([]byte, *scene.Scene, error) {
 	isSceneDump := func(data []byte) bool {
 		if !isKorgResponse(data) {
 			return false
@@ -369,18 +376,18 @@ func queryScene(m *midiConn) ([]byte, *Scene, error) {
 	}
 
 	encoded := resp[headerLen : headerLen+388]
-	decoded := decode7bit(encoded)
+	decoded := scene.Decode7bit(encoded)
 
-	scene, err := decodeScene(decoded)
-	if err != nil {
-		return nil, nil, fmt.Errorf("decode scene: %w", err)
+	s := scene.DecodeScene(decoded)
+	if s == nil {
+		return nil, nil, fmt.Errorf("decode scene: buffer too short")
 	}
-	return decoded, scene, nil
+	return decoded, s, nil
 }
 
-// writeScene sends scene data to the device and waits for save confirmation.
-func writeScene(m *midiConn, decoded []byte) error {
-	encoded := encode7bit(decoded)
+// WriteScene sends scene data to the device and waits for save confirmation.
+func WriteScene(m *MidiConn, decoded []byte) error {
+	encoded := scene.Encode7bit(decoded)
 	writePayload := append(append([]byte(nil), sysexWritePrefix...), encoded...)
 
 	isACK := func(data []byte) bool {
@@ -419,8 +426,8 @@ func writeScene(m *midiConn, decoded []byte) error {
 	return nil
 }
 
-// listPorts prints all available ALSA MIDI sequencer ports.
-func listPorts(portName string) {
+// ListPorts prints all available ALSA MIDI sequencer ports.
+func ListPorts(portName string) {
 	cname := C.CString("nanoctl-list")
 	defer C.free(unsafe.Pointer(cname))
 	ac := C.alsa_open(cname)

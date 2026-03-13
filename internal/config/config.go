@@ -1,18 +1,11 @@
-package main
+package config
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
-)
 
-// JSON-friendly string enum tables (lowercase, matching CLI flag values).
-var (
-	jsonControlModeNames = []string{"cc", "cubase", "dp", "live", "protools", "sonar"}
-	jsonLEDModeNames     = []string{"internal", "external"}
-	jsonAssignNames      = []string{"none", "cc", "note"}
-	jsonBehaviorNames    = []string{"momentary", "toggle"}
+	"nanoctl/internal/scene"
 )
 
 // SceneJSON is the JSON representation of a Scene.
@@ -50,65 +43,26 @@ type ButtonJSON struct {
 	OnVal    int    `json:"on_val"`
 }
 
-// chToString converts an internal channel value (0-15 or 16=global) to a JSON string.
-func chToString(ch int) string {
-	if ch == 16 {
-		return "global"
-	}
-	return fmt.Sprintf("%d", ch+1)
-}
-
-// chFromString parses a channel string ("1"-"16" or "global") to an internal value.
-func chFromString(s string) (int, error) {
-	if strings.ToLower(s) == "global" {
-		return 16, nil
-	}
-	var n int
-	if _, err := fmt.Sscanf(s, "%d", &n); err != nil || n < 1 || n > 16 {
-		return 0, fmt.Errorf("invalid channel %q: must be 1-16 or \"global\"", s)
-	}
-	return n - 1, nil
-}
-
-// enumToString returns the string name for an int enum index, or an error string.
-func enumToString(idx int, names []string) string {
-	if idx >= 0 && idx < len(names) {
-		return names[idx]
-	}
-	return fmt.Sprintf("unknown(%d)", idx)
-}
-
-// enumFromString returns the index for a string enum name, or an error.
-func enumFromString(val string, names []string, field string) (int, error) {
-	v := strings.ToLower(val)
-	for i, name := range names {
-		if v == name {
-			return i, nil
-		}
-	}
-	return 0, fmt.Errorf("invalid %s %q: must be one of %v", field, val, names)
-}
-
-func buttonToJSON(b ButtonConfig) ButtonJSON {
+func buttonToJSON(b scene.ButtonConfig) ButtonJSON {
 	return ButtonJSON{
-		Assign:   enumToString(b.Assign, jsonAssignNames),
-		Behavior: enumToString(b.Behavior, jsonBehaviorNames),
+		Assign:   scene.EnumToString(b.Assign, scene.AssignNames),
+		Behavior: scene.EnumToString(b.Behavior, scene.BehaviorNames),
 		CC:       b.CC,
 		OffVal:   b.OffVal,
 		OnVal:    b.OnVal,
 	}
 }
 
-func buttonFromJSON(j ButtonJSON) (ButtonConfig, error) {
-	assign, err := enumFromString(j.Assign, jsonAssignNames, "assign")
+func buttonFromJSON(j ButtonJSON) (scene.ButtonConfig, error) {
+	assign, err := scene.EnumFromString(j.Assign, scene.AssignNames, "assign")
 	if err != nil {
-		return ButtonConfig{}, err
+		return scene.ButtonConfig{}, err
 	}
-	behavior, err := enumFromString(j.Behavior, jsonBehaviorNames, "behavior")
+	behavior, err := scene.EnumFromString(j.Behavior, scene.BehaviorNames, "behavior")
 	if err != nil {
-		return ButtonConfig{}, err
+		return scene.ButtonConfig{}, err
 	}
-	return ButtonConfig{
+	return scene.ButtonConfig{
 		Assign:   assign,
 		Behavior: behavior,
 		CC:       j.CC,
@@ -117,9 +71,9 @@ func buttonFromJSON(j ButtonJSON) (ButtonConfig, error) {
 	}, nil
 }
 
-func groupToJSON(g Group) GroupJSON {
+func groupToJSON(g scene.Group) GroupJSON {
 	return GroupJSON{
-		MidiCh:        chToString(g.MidiCh),
+		MidiCh:        scene.ChToString(g.MidiCh),
 		SliderEnabled: g.SliderEnabled,
 		SliderCC:      g.SliderCC,
 		SliderMin:     g.SliderMin,
@@ -134,24 +88,24 @@ func groupToJSON(g Group) GroupJSON {
 	}
 }
 
-func groupFromJSON(j GroupJSON) (Group, error) {
-	ch, err := chFromString(j.MidiCh)
+func groupFromJSON(j GroupJSON) (scene.Group, error) {
+	ch, err := scene.ChFromString(j.MidiCh)
 	if err != nil {
-		return Group{}, fmt.Errorf("midi_ch: %w", err)
+		return scene.Group{}, fmt.Errorf("midi_ch: %w", err)
 	}
 	solo, err := buttonFromJSON(j.Solo)
 	if err != nil {
-		return Group{}, fmt.Errorf("solo: %w", err)
+		return scene.Group{}, fmt.Errorf("solo: %w", err)
 	}
 	mute, err := buttonFromJSON(j.Mute)
 	if err != nil {
-		return Group{}, fmt.Errorf("mute: %w", err)
+		return scene.Group{}, fmt.Errorf("mute: %w", err)
 	}
 	rec, err := buttonFromJSON(j.Rec)
 	if err != nil {
-		return Group{}, fmt.Errorf("rec: %w", err)
+		return scene.Group{}, fmt.Errorf("rec: %w", err)
 	}
-	return Group{
+	return scene.Group{
 		MidiCh:        ch,
 		SliderEnabled: j.SliderEnabled,
 		SliderCC:      j.SliderCC,
@@ -168,12 +122,12 @@ func groupFromJSON(j GroupJSON) (Group, error) {
 }
 
 // sceneToJSON converts a Scene to its JSON representation.
-func sceneToJSON(s *Scene) SceneJSON {
+func sceneToJSON(s *scene.Scene) SceneJSON {
 	j := SceneJSON{
 		GlobalMidiCh: s.GlobalMidiCh + 1,
-		ControlMode:  enumToString(s.ControlMode, jsonControlModeNames),
-		LEDMode:      enumToString(s.LEDMode, jsonLEDModeNames),
-		TransportCh:  chToString(s.TransportCh),
+		ControlMode:  scene.EnumToString(s.ControlMode, scene.ControlModeNames),
+		LEDMode:      scene.EnumToString(s.LEDMode, scene.LEDModeNames),
+		TransportCh:  scene.ChToString(s.TransportCh),
 	}
 	for i, g := range s.Groups {
 		j.Groups[i] = groupToJSON(g)
@@ -185,24 +139,24 @@ func sceneToJSON(s *Scene) SceneJSON {
 }
 
 // sceneFromJSON converts a SceneJSON to a Scene, returning an error on invalid values.
-func sceneFromJSON(j SceneJSON) (*Scene, error) {
+func sceneFromJSON(j SceneJSON) (*scene.Scene, error) {
 	if j.GlobalMidiCh < 1 || j.GlobalMidiCh > 16 {
 		return nil, fmt.Errorf("global_midi_ch %d out of range 1-16", j.GlobalMidiCh)
 	}
-	controlMode, err := enumFromString(j.ControlMode, jsonControlModeNames, "control_mode")
+	controlMode, err := scene.EnumFromString(j.ControlMode, scene.ControlModeNames, "control_mode")
 	if err != nil {
 		return nil, err
 	}
-	ledMode, err := enumFromString(j.LEDMode, jsonLEDModeNames, "led_mode")
+	ledMode, err := scene.EnumFromString(j.LEDMode, scene.LEDModeNames, "led_mode")
 	if err != nil {
 		return nil, err
 	}
-	transportCh, err := chFromString(j.TransportCh)
+	transportCh, err := scene.ChFromString(j.TransportCh)
 	if err != nil {
 		return nil, fmt.Errorf("transport_ch: %w", err)
 	}
 
-	s := &Scene{
+	s := &scene.Scene{
 		GlobalMidiCh: j.GlobalMidiCh - 1,
 		ControlMode:  controlMode,
 		LEDMode:      ledMode,
@@ -225,13 +179,13 @@ func sceneFromJSON(j SceneJSON) (*Scene, error) {
 	return s, nil
 }
 
-// marshalSceneJSON encodes a Scene as indented JSON.
-func marshalSceneJSON(s *Scene) ([]byte, error) {
+// MarshalSceneJSON encodes a Scene as indented JSON.
+func MarshalSceneJSON(s *scene.Scene) ([]byte, error) {
 	return json.MarshalIndent(sceneToJSON(s), "", "  ")
 }
 
-// loadSceneFromFile reads a JSON file and returns the parsed Scene.
-func loadSceneFromFile(path string) (*Scene, error) {
+// LoadSceneFromFile reads a JSON file and returns the parsed Scene.
+func LoadSceneFromFile(path string) (*scene.Scene, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)

@@ -8,6 +8,11 @@ import (
 	"strings"
 
 	"github.com/spf13/pflag"
+
+	"nanoctl/internal/config"
+	"nanoctl/internal/display"
+	"nanoctl/internal/midi"
+	"nanoctl/internal/scene"
 )
 
 // transportButtonNames lists the transport buttons in scene data order.
@@ -19,9 +24,6 @@ var transportButtonNames = []string{
 
 // groupButtonNames lists the per-strip button types.
 var groupButtonNames = []string{"solo", "mute", "rec"}
-
-// flags holds parsed flag values; used as string maps to detect changes via pflag.Changed.
-// Numeric flags use pflag's Int / String types directly; string-typed enums use String.
 
 func main() {
 	fs := pflag.NewFlagSet("nanoctl", pflag.ContinueOnError)
@@ -115,7 +117,7 @@ func main() {
 	}
 
 	if *listPortsFlag {
-		listPorts(*portFlag)
+		midi.ListPorts(*portFlag)
 		os.Exit(0)
 	}
 
@@ -129,7 +131,7 @@ func main() {
 	}
 
 	// Open MIDI port.
-	conn, cleanup, err := openPorts(*portFlag)
+	conn, cleanup, err := midi.OpenPorts(*portFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error opening MIDI port: %v\n", err)
 		os.Exit(1)
@@ -137,7 +139,7 @@ func main() {
 	defer cleanup()
 
 	var rawScene []byte
-	var scene *Scene
+	var s *scene.Scene
 
 	// Apply config file if specified.
 	if fs.Changed("config-file") {
@@ -145,20 +147,20 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error: --config-file cannot be combined with individual scene flags")
 			os.Exit(1)
 		}
-		newScene, err := loadSceneFromFile(*configFlag)
+		newScene, err := config.LoadSceneFromFile(*configFlag)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		if rawScene == nil {
-			rawScene, _, err = queryScene(conn)
+			rawScene, _, err = midi.QueryScene(conn)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error querying scene: %v\n", err)
 				os.Exit(1)
 			}
 		}
-		rawScene = applySceneToBytes(rawScene, newScene)
-		if err := writeScene(conn, rawScene); err != nil {
+		rawScene = scene.ApplySceneToBytes(rawScene, newScene)
+		if err := midi.WriteScene(conn, rawScene); err != nil {
 			fmt.Fprintf(os.Stderr, "error writing scene: %v\n", err)
 			os.Exit(1)
 		}
@@ -167,21 +169,21 @@ func main() {
 
 	// Apply scene parameter changes if any were set.
 	if len(sceneFlags) > 0 {
-		rawScene, scene, err = queryScene(conn)
+		rawScene, s, err = midi.QueryScene(conn)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error querying scene: %v\n", err)
 			os.Exit(1)
 		}
 
-		applySceneFlags(fs, scene, sceneFlags, globalMidiCh, controlMode, ledMode,
+		applySceneFlags(s, sceneFlags, globalMidiCh, controlMode, ledMode,
 			groupMidiCh, groupSliderEnabled, groupSliderCC, groupSliderMin, groupSliderMax,
 			groupKnobEnabled, groupKnobCC, groupKnobMin, groupKnobMax,
 			groupBtnAssign, groupBtnBehavior, groupBtnCC, groupBtnOff, groupBtnOn,
 			transportMidiCh, transportBtnAssign, transportBtnBehavior, transportBtnCC, transportBtnOff, transportBtnOn)
 
-		rawScene = applySceneToBytes(rawScene, scene)
+		rawScene = scene.ApplySceneToBytes(rawScene, s)
 
-		if err := writeScene(conn, rawScene); err != nil {
+		if err := midi.WriteScene(conn, rawScene); err != nil {
 			fmt.Fprintf(os.Stderr, "error writing scene: %v\n", err)
 			os.Exit(1)
 		}
@@ -190,8 +192,8 @@ func main() {
 
 	// Send LED CC messages if any LED flags were set.
 	if len(ledFlags) > 0 {
-		if scene == nil {
-			rawScene, scene, err = queryScene(conn)
+		if s == nil {
+			rawScene, s, err = midi.QueryScene(conn)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error querying scene: %v\n", err)
 				os.Exit(1)
@@ -199,12 +201,11 @@ func main() {
 			_ = rawScene
 		}
 
-		if scene.LEDMode != 1 {
+		if s.LEDMode != 1 {
 			fmt.Fprintln(os.Stderr, "warning: LED mode is Internal — LEDs are controlled by the device, not the host")
 		}
 
-		if err := sendLEDs(conn, scene, fs,
-			groupBtnLED, transportBtnLED); err != nil {
+		if err := sendLEDs(conn, s, fs, groupBtnLED, transportBtnLED); err != nil {
 			fmt.Fprintf(os.Stderr, "error sending LED messages: %v\n", err)
 			os.Exit(1)
 		}
@@ -212,7 +213,7 @@ func main() {
 
 	// If --show was requested, query the (possibly updated) scene and display it.
 	if *showFlag {
-		_, scene, err = queryScene(conn)
+		_, s, err = midi.QueryScene(conn)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error querying scene: %v\n", err)
 			os.Exit(1)
@@ -226,14 +227,14 @@ func main() {
 		defer closeOut()
 
 		if *jsonFlag {
-			data, err := marshalSceneJSON(scene)
+			data, err := config.MarshalSceneJSON(s)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error marshalling JSON: %v\n", err)
 				os.Exit(1)
 			}
 			fmt.Fprintln(out, string(data))
 		} else {
-			displayScene(out, scene)
+			display.DisplayScene(out, s)
 		}
 	}
 }
@@ -299,69 +300,13 @@ func collectLEDFlags(fs *pflag.FlagSet) map[string]bool {
 	return changed
 }
 
-func parseChFlag(val string) int {
-	if strings.ToLower(val) == "global" {
-		return 16
-	}
-	n := 1
-	fmt.Sscanf(val, "%d", &n)
-	if n < 1 {
-		n = 1
-	} else if n > 16 {
-		n = 16
-	}
-	return n - 1 // convert 1-16 → 0-15
-}
-
 func parseBoolFlag(val string) bool {
 	return strings.ToLower(val) == "true" || val == "1" || strings.ToLower(val) == "yes"
 }
 
-func parseAssign(val string) int {
-	switch strings.ToLower(val) {
-	case "none", "no", "noassign":
-		return 0
-	case "note":
-		return 2
-	default:
-		return 1 // "cc"
-	}
-}
-
-func parseBehavior(val string) int {
-	if strings.ToLower(val) == "toggle" {
-		return 1
-	}
-	return 0
-}
-
-func parseControlMode(val string) int {
-	switch strings.ToLower(val) {
-	case "cubase":
-		return 1
-	case "dp":
-		return 2
-	case "live":
-		return 3
-	case "protools":
-		return 4
-	case "sonar":
-		return 5
-	default:
-		return 0 // "cc"
-	}
-}
-
-func parseLEDMode(val string) int {
-	if strings.ToLower(val) == "external" {
-		return 1
-	}
-	return 0
-}
-
 // applySceneFlags applies all changed scene-param flags to the scene struct.
 func applySceneFlags(
-	fs *pflag.FlagSet, s *Scene, changed map[string]bool,
+	s *scene.Scene, changed map[string]bool,
 	globalMidiCh *int, controlMode, ledMode *string,
 	groupMidiCh, groupSliderEnabled []string,
 	groupSliderCC, groupSliderMin, groupSliderMax []int,
@@ -377,10 +322,14 @@ func applySceneFlags(
 		s.GlobalMidiCh = *globalMidiCh - 1
 	}
 	if changed["control-mode"] {
-		s.ControlMode = parseControlMode(*controlMode)
+		if idx, err := scene.EnumFromString(*controlMode, scene.ControlModeNames, "control_mode"); err == nil {
+			s.ControlMode = idx
+		}
 	}
 	if changed["led-mode"] {
-		s.LEDMode = parseLEDMode(*ledMode)
+		if idx, err := scene.EnumFromString(*ledMode, scene.LEDModeNames, "led_mode"); err == nil {
+			s.LEDMode = idx
+		}
 	}
 
 	for i := range 8 {
@@ -388,7 +337,9 @@ func applySceneFlags(
 		g := &s.Groups[i]
 
 		if changed[fmt.Sprintf("group-%d-midi-ch", n)] {
-			g.MidiCh = parseChFlag(groupMidiCh[i])
+			if ch, err := scene.ChFromString(groupMidiCh[i]); err == nil {
+				g.MidiCh = ch
+			}
 		}
 		if changed[fmt.Sprintf("group-%d-slider-enabled", n)] {
 			g.SliderEnabled = parseBoolFlag(groupSliderEnabled[i])
@@ -415,14 +366,18 @@ func applySceneFlags(
 			g.KnobMax = groupKnobMax[i]
 		}
 
-		btns := []*ButtonConfig{&g.Solo, &g.Mute, &g.Rec}
+		btns := []*scene.ButtonConfig{&g.Solo, &g.Mute, &g.Rec}
 		for j, btn := range groupButtonNames {
 			b := btns[j]
 			if changed[fmt.Sprintf("group-%d-%s-assign", n, btn)] {
-				b.Assign = parseAssign(groupBtnAssign[i][j])
+				if idx, err := scene.EnumFromString(groupBtnAssign[i][j], scene.AssignNames, "assign"); err == nil {
+					b.Assign = idx
+				}
 			}
 			if changed[fmt.Sprintf("group-%d-%s-behavior", n, btn)] {
-				b.Behavior = parseBehavior(groupBtnBehavior[i][j])
+				if idx, err := scene.EnumFromString(groupBtnBehavior[i][j], scene.BehaviorNames, "behavior"); err == nil {
+					b.Behavior = idx
+				}
 			}
 			if changed[fmt.Sprintf("group-%d-%s-cc", n, btn)] {
 				b.CC = groupBtnCC[i][j]
@@ -437,15 +392,21 @@ func applySceneFlags(
 	}
 
 	if changed["transport-midi-ch"] {
-		s.TransportCh = parseChFlag(*transportMidiCh)
+		if ch, err := scene.ChFromString(*transportMidiCh); err == nil {
+			s.TransportCh = ch
+		}
 	}
 	for i, name := range transportButtonNames {
 		b := &s.Transport[i]
 		if changed[fmt.Sprintf("transport-%s-assign", name)] {
-			b.Assign = parseAssign(transportBtnAssign[i])
+			if idx, err := scene.EnumFromString(transportBtnAssign[i], scene.AssignNames, "assign"); err == nil {
+				b.Assign = idx
+			}
 		}
 		if changed[fmt.Sprintf("transport-%s-behavior", name)] {
-			b.Behavior = parseBehavior(transportBtnBehavior[i])
+			if idx, err := scene.EnumFromString(transportBtnBehavior[i], scene.BehaviorNames, "behavior"); err == nil {
+				b.Behavior = idx
+			}
 		}
 		if changed[fmt.Sprintf("transport-%s-cc", name)] {
 			b.CC = transportBtnCC[i]
@@ -460,25 +421,25 @@ func applySceneFlags(
 }
 
 // sendLEDs sends CC messages for all changed LED flags.
-func sendLEDs(conn *midiConn, s *Scene, fs *pflag.FlagSet,
+func sendLEDs(conn *midi.MidiConn, s *scene.Scene, fs *pflag.FlagSet,
 	groupBtnLED [][]string, transportBtnLED []string,
 ) error {
 	for i := range 8 {
 		n := i + 1
 		g := s.Groups[i]
-		btns := []ButtonConfig{g.Solo, g.Mute, g.Rec}
+		btns := []scene.ButtonConfig{g.Solo, g.Mute, g.Rec}
 		for j, btn := range groupButtonNames {
 			flagName := fmt.Sprintf("group-%d-%s-led", n, btn)
 			if !fs.Changed(flagName) {
 				continue
 			}
-			ch := effectiveMidiCh(g.MidiCh, s.GlobalMidiCh)
+			ch := scene.EffectiveMidiCh(g.MidiCh, s.GlobalMidiCh)
 			cc := btns[j].CC
 			val := 0
 			if strings.ToLower(groupBtnLED[i][j]) == "on" {
 				val = 127
 			}
-			if err := conn.sendCC(ch, cc, val); err != nil {
+			if err := midi.SendCC(conn, ch, cc, val); err != nil {
 				return fmt.Errorf("send LED CC for %s: %w", flagName, err)
 			}
 		}
@@ -489,13 +450,13 @@ func sendLEDs(conn *midiConn, s *Scene, fs *pflag.FlagSet,
 		if !fs.Changed(flagName) {
 			continue
 		}
-		ch := effectiveMidiCh(s.TransportCh, s.GlobalMidiCh)
+		ch := scene.EffectiveMidiCh(s.TransportCh, s.GlobalMidiCh)
 		cc := s.Transport[i].CC
 		val := 0
 		if strings.ToLower(transportBtnLED[i]) == "on" {
 			val = 127
 		}
-		if err := conn.sendCC(ch, cc, val); err != nil {
+		if err := midi.SendCC(conn, ch, cc, val); err != nil {
 			return fmt.Errorf("send LED CC for %s: %w", flagName, err)
 		}
 	}

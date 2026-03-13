@@ -1,21 +1,23 @@
-package main
+package config
 
 import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"nanoctl/internal/scene"
 )
 
 // makeTestScene returns a Scene with non-default values for thorough round-trip testing.
-func makeTestScene() *Scene {
-	s := &Scene{
+func makeTestScene() *scene.Scene {
+	s := &scene.Scene{
 		GlobalMidiCh: 3,  // 0-based, so ch 4
 		ControlMode:  2,  // "dp"
 		LEDMode:      1,  // "external"
 		TransportCh:  16, // "global"
 	}
 	for i := range s.Groups {
-		s.Groups[i] = Group{
+		s.Groups[i] = scene.Group{
 			MidiCh:        i % 17, // mix of channels and global
 			SliderEnabled: i%2 == 0,
 			SliderCC:      i * 3,
@@ -25,13 +27,13 @@ func makeTestScene() *Scene {
 			KnobCC:        i*3 + 1,
 			KnobMin:       i + 1,
 			KnobMax:       126 - i,
-			Solo:          ButtonConfig{Assign: 1, Behavior: 0, CC: i * 4, OffVal: 0, OnVal: 127},
-			Mute:          ButtonConfig{Assign: 2, Behavior: 1, CC: i*4 + 1, OffVal: 10, OnVal: 100},
-			Rec:           ButtonConfig{Assign: 0, Behavior: 0, CC: 0, OffVal: 0, OnVal: 0},
+			Solo:          scene.ButtonConfig{Assign: 1, Behavior: 0, CC: i * 4, OffVal: 0, OnVal: 127},
+			Mute:          scene.ButtonConfig{Assign: 2, Behavior: 1, CC: i*4 + 1, OffVal: 10, OnVal: 100},
+			Rec:           scene.ButtonConfig{Assign: 0, Behavior: 0, CC: 0, OffVal: 0, OnVal: 0},
 		}
 	}
 	for i := range s.Transport {
-		s.Transport[i] = ButtonConfig{
+		s.Transport[i] = scene.ButtonConfig{
 			Assign:   i % 3,
 			Behavior: i % 2,
 			CC:       i * 5,
@@ -72,133 +74,6 @@ func TestSceneRoundTrip(t *testing.T) {
 	for i := range original.Transport {
 		if original.Transport[i] != got.Transport[i] {
 			t.Errorf("Transport[%d]: got %+v, want %+v", i, got.Transport[i], original.Transport[i])
-		}
-	}
-}
-
-func TestControlModeStrings(t *testing.T) {
-	cases := []struct {
-		idx  int
-		want string
-	}{
-		{0, "cc"},
-		{1, "cubase"},
-		{2, "dp"},
-		{3, "live"},
-		{4, "protools"},
-		{5, "sonar"},
-	}
-	for _, c := range cases {
-		s := &Scene{ControlMode: c.idx}
-		j := sceneToJSON(s)
-		if j.ControlMode != c.want {
-			t.Errorf("ControlMode %d: got %q, want %q", c.idx, j.ControlMode, c.want)
-		}
-		// round-trip
-		got, err := sceneFromJSON(j)
-		if err != nil {
-			t.Fatalf("sceneFromJSON error for ControlMode %q: %v", c.want, err)
-		}
-		if got.ControlMode != c.idx {
-			t.Errorf("ControlMode round-trip %q: got %d, want %d", c.want, got.ControlMode, c.idx)
-		}
-	}
-}
-
-func TestLEDModeStrings(t *testing.T) {
-	cases := []struct {
-		idx  int
-		want string
-	}{
-		{0, "internal"},
-		{1, "external"},
-	}
-	for _, c := range cases {
-		s := &Scene{LEDMode: c.idx}
-		j := sceneToJSON(s)
-		if j.LEDMode != c.want {
-			t.Errorf("LEDMode %d: got %q, want %q", c.idx, j.LEDMode, c.want)
-		}
-		got, err := sceneFromJSON(j)
-		if err != nil {
-			t.Fatalf("sceneFromJSON error for LEDMode %q: %v", c.want, err)
-		}
-		if got.LEDMode != c.idx {
-			t.Errorf("LEDMode round-trip %q: got %d, want %d", c.want, got.LEDMode, c.idx)
-		}
-	}
-}
-
-func TestAssignStrings(t *testing.T) {
-	cases := []struct {
-		idx  int
-		want string
-	}{
-		{0, "none"},
-		{1, "cc"},
-		{2, "note"},
-	}
-	for _, c := range cases {
-		b := ButtonConfig{Assign: c.idx}
-		bj := buttonToJSON(b)
-		if bj.Assign != c.want {
-			t.Errorf("Assign %d: got %q, want %q", c.idx, bj.Assign, c.want)
-		}
-		got, err := buttonFromJSON(bj)
-		if err != nil {
-			t.Fatalf("buttonFromJSON error for Assign %q: %v", c.want, err)
-		}
-		if got.Assign != c.idx {
-			t.Errorf("Assign round-trip %q: got %d, want %d", c.want, got.Assign, c.idx)
-		}
-	}
-}
-
-func TestBehaviorStrings(t *testing.T) {
-	cases := []struct {
-		idx  int
-		want string
-	}{
-		{0, "momentary"},
-		{1, "toggle"},
-	}
-	for _, c := range cases {
-		b := ButtonConfig{Behavior: c.idx}
-		bj := buttonToJSON(b)
-		if bj.Behavior != c.want {
-			t.Errorf("Behavior %d: got %q, want %q", c.idx, bj.Behavior, c.want)
-		}
-		got, err := buttonFromJSON(bj)
-		if err != nil {
-			t.Fatalf("buttonFromJSON error for Behavior %q: %v", c.want, err)
-		}
-		if got.Behavior != c.idx {
-			t.Errorf("Behavior round-trip %q: got %d, want %d", c.want, got.Behavior, c.idx)
-		}
-	}
-}
-
-func TestChannelFormatting(t *testing.T) {
-	cases := []struct {
-		internal int
-		str      string
-	}{
-		{0, "1"},
-		{14, "15"},
-		{15, "16"},
-		{16, "global"},
-	}
-	for _, c := range cases {
-		got := chToString(c.internal)
-		if got != c.str {
-			t.Errorf("chToString(%d): got %q, want %q", c.internal, got, c.str)
-		}
-		back, err := chFromString(c.str)
-		if err != nil {
-			t.Fatalf("chFromString(%q) error: %v", c.str, err)
-		}
-		if back != c.internal {
-			t.Errorf("chFromString(%q): got %d, want %d", c.str, back, c.internal)
 		}
 	}
 }
@@ -276,9 +151,9 @@ func TestSceneFromJSONErrors(t *testing.T) {
 
 func TestLoadSceneFromFile(t *testing.T) {
 	original := makeTestScene()
-	data, err := marshalSceneJSON(original)
+	data, err := MarshalSceneJSON(original)
 	if err != nil {
-		t.Fatalf("marshalSceneJSON error: %v", err)
+		t.Fatalf("MarshalSceneJSON error: %v", err)
 	}
 
 	f, err := os.CreateTemp("", "scene-*.json")
@@ -291,9 +166,9 @@ func TestLoadSceneFromFile(t *testing.T) {
 	}
 	f.Close()
 
-	got, err := loadSceneFromFile(f.Name())
+	got, err := LoadSceneFromFile(f.Name())
 	if err != nil {
-		t.Fatalf("loadSceneFromFile error: %v", err)
+		t.Fatalf("LoadSceneFromFile error: %v", err)
 	}
 	if got.GlobalMidiCh != original.GlobalMidiCh {
 		t.Errorf("GlobalMidiCh: got %d, want %d", got.GlobalMidiCh, original.GlobalMidiCh)
@@ -310,7 +185,7 @@ func TestLoadSceneFromFile(t *testing.T) {
 
 func TestLoadSceneFromFileErrors(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
-		if _, err := loadSceneFromFile("/nonexistent/path.json"); err == nil {
+		if _, err := LoadSceneFromFile("/nonexistent/path.json"); err == nil {
 			t.Error("expected error for missing file")
 		}
 	})
@@ -323,7 +198,7 @@ func TestLoadSceneFromFileErrors(t *testing.T) {
 		defer os.Remove(f.Name())
 		f.WriteString("{not valid json}")
 		f.Close()
-		if _, err := loadSceneFromFile(f.Name()); err == nil {
+		if _, err := LoadSceneFromFile(f.Name()); err == nil {
 			t.Error("expected error for invalid JSON")
 		}
 	})
@@ -355,7 +230,7 @@ func TestLoadSceneFromFileErrors(t *testing.T) {
 		data, _ := json.Marshal(bad)
 		f.Write(data)
 		f.Close()
-		if _, err := loadSceneFromFile(f.Name()); err == nil {
+		if _, err := LoadSceneFromFile(f.Name()); err == nil {
 			t.Error("expected error for invalid led_mode in file")
 		}
 	})
